@@ -138,3 +138,39 @@ def handle_client(conn, addr):
         print(f"Error handling client: {e}")
     finally:
         conn.close()
+
+def broadcast_offers(tcp_port):
+    """Broadcasts UDP offers every 1 second."""
+    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    
+    packet = pack_offer(tcp_port)
+    
+    print(f"Server started, listening on IP address {socket.gethostbyname(socket.gethostname())}")
+    
+    while True:
+        try:
+            udp_sock.sendto(packet, ('<broadcast>', UDP_PORT))
+            time.sleep(1)
+        except:
+            time.sleep(1)
+
+def start_server():
+    # TCP Socket
+    tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tcp_sock.bind(('', 0)) # Bind to any available port
+    tcp_sock.listen()
+    
+    tcp_port = tcp_sock.getsockname()[1]
+    
+    # Start UDP Broadcast thread
+    t = threading.Thread(target=broadcast_offers, args=(tcp_port,), daemon=True)
+    t.start()
+    
+    while True:
+        conn, addr = tcp_sock.accept()
+        t_client = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
+        t_client.start()
+
+if __name__ == "__main__":
+    start_server()
