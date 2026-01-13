@@ -41,3 +41,100 @@ def get_card_value(rank):
     if rank == 1: return 11 # Ace
     if rank >= 10: return 10 # Face cards
     return rank
+
+def draw_card():
+    """Returns (Rank, Suit) tuple. Rank 1-13, Suit 0-3."""
+    return (random.randint(1, 13), random.randint(0, 3))
+
+def handle_client(conn, addr):
+    print(f"New connection from {addr}")
+    try:
+        # Receives Request
+        data = conn.recv(1024)
+        if not data: return
+        cookie, msg_type, num_rounds, team_name = unpack_request(data)
+        
+        if cookie != MAGIC_COOKIE or msg_type != MSG_REQUEST:
+            print("Invalid packet.")
+            return
+
+        team_name_str = team_name.decode('utf-8').strip('\x00')
+        print(f"Player {team_name_str} wants to play {num_rounds} rounds.")
+
+        # Game Loop
+        for round_num in range(1, num_rounds + 1):
+            print(f"--- Round {round_num} ---")
+            
+            # Initial Deal
+            player_cards = [draw_card(), draw_card()]
+            dealer_cards = [draw_card(), draw_card()] # 2nd is hidden
+            
+            player_sum = sum(get_card_value(c[0]) for c in player_cards)
+            
+            # Send player's 2 cards
+            conn.sendall(pack_payload(RESULT_CONTINUE, player_cards[0][0], player_cards[0][1]))
+            conn.sendall(pack_payload(RESULT_CONTINUE, player_cards[1][0], player_cards[1][1]))
+            
+            # Send dealer's 1st card
+            conn.sendall(pack_payload(RESULT_CONTINUE, dealer_cards[0][0], dealer_cards[0][1]))
+
+            # Player Turn
+            busted = False
+            while True:
+                # Receive decision
+                packet = conn.recv(1024) # Expecting Header + 5 chrs
+                if len(packet) < 10: break # check
+                
+                # Unpack: !IB5s (Cookie, Type, "Hittt" or "Stand")
+                try:
+                    p_cookie, p_type, decision = struct.unpack('!IB5s', packet[:10])
+                except:
+                    break
+                    
+                cmd = decision.decode('utf-8')
+
+                if "Hit" in cmd:
+                    new_card = draw_card()
+                    player_sum += get_card_value(new_card[0])
+                    # Checks bust
+                    if player_sum > 21:
+                        # Send Card + LOSS
+                        conn.sendall(pack_payload(RESULT_LOSS, new_card[0], new_card[1]))
+                        busted = True
+                        break
+                    else:
+                        # Send Card + CONTINUE
+                        conn.sendall(pack_payload(RESULT_CONTINUE, new_card[0], new_card[1]))
+                
+                elif "Stand" in cmd:
+                    break
+
+            # Dealer Turn if player not bust
+            if not busted:
+                dealer_sum = sum(get_card_value(c[0]) for c in dealer_cards)
+                
+                # Reveal Dealer's hidden card (send it to client)
+                conn.sendall(pack_payload(RESULT_CONTINUE, dealer_cards[1][0], dealer_cards[1][1]))
+
+                while dealer_sum < 17:
+                    new_card = draw_card()
+                    dealer_sum += get_card_value(new_card[0])
+                    # Send dealer's draw to client
+                    conn.sendall(pack_payload(RESULT_CONTINUE, new_card[0], new_card[1]))
+
+                # Determines Winner
+                result = RESULT_TIE
+                if dealer_sum > 21:
+                    result = RESULT_WIN # Dealer busted
+                elif player_sum > dealer_sum:
+                    result = RESULT_WIN
+                elif player_sum < dealer_sum:
+                    result = RESULT_LOSS
+                
+                # Send Final Result (using dummy card 0,0)
+                conn.sendall(pack_payload(result, 0, 0))
+
+    except Exception as e:
+        print(f"Error handling client: {e}")
+    finally:
+        conn.close()
