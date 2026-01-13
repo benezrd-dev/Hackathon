@@ -97,3 +97,6 @@ def play_game():
     finally:
         tcp_sock.close()
         print("Connection closed.")
+
+if __name__ == "__main__":
+    play_game()
